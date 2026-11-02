@@ -1,12 +1,10 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useMemo, useRef, type RefObject } from "react";
+import { useEffect, useMemo, useRef, type RefObject } from "react";
 import { useFrame } from "@react-three/fiber";
-import { Html, Sparkles } from "@react-three/drei";
+import { Html, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
 import type { BustTheme } from "@/lib/theme";
-import { HEAD_VARIANTS, buildEar, buildHead, earAnchor, rng, sampleSurface, type HeadData, type SurfaceSample } from "@/lib/head";
-import { makeSkinTextures } from "@/lib/skin";
 import { Damped, clampDt } from "@/lib/motion";
 
 export interface BustTarget {
@@ -31,72 +29,88 @@ interface Props {
   onSelect: (i: number) => void;
 }
 
-const HEAD_Y = 0.95; // altura del centro de la cabeza dentro del busto
-const NECK_Z = -0.2;
-
 /* ------------------------------------------------------------------ */
-/* Geometrías (se construyen una sola vez y se comparten)              */
+/* Escaneo 3D de una cabeza humana real                                */
+/*   "Infinite" 3D Head Scan, Lee Perry-Smith (CC BY 3.0, triplegangers.com) */
 /* ------------------------------------------------------------------ */
 
-function toGeometry(d: HeadData): THREE.BufferGeometry {
-  const g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.BufferAttribute(d.positions, 3));
-  g.setAttribute("normal", new THREE.BufferAttribute(d.normals, 3));
-  g.setAttribute("uv", new THREE.BufferAttribute(d.uvs, 2));
-  g.setIndex(new THREE.BufferAttribute(d.indices, 1));
+const BASE = "/models/head";
+const HEAD_URL = `${BASE}/LeePerrySmith.glb`;
+useGLTF.preload(HEAD_URL);
+
+const HEAD_Y = 0.39; // altura del centro de la cabeza (para el halo)
+const K = 0.53; // escala del escaneo → unidades de la escena (cabeza ≈ 2.6 de alto)
+const CUT = -1.28; // por debajo de esta altura se descartan los triángulos (hombros)
+const FADE_TOP = -0.95; // el cuello se apaga entre FADE_TOP y FADE_END, así el corte no se nota
+const FADE_END = -1.25;
+
+const smooth = (a: number, b: number, x: number) => {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+};
+
+let headGeo: THREE.BufferGeometry | null = null;
+
+/** Centra y escala el escaneo, quita los hombros y apaga el cuello hacia abajo (color de vértice). */
+function prepareHead(src: THREE.BufferGeometry): THREE.BufferGeometry {
+  if (headGeo) return headGeo;
+  const g = src.clone();
+  // Pivote en el eje del cuello: la cabeza gira sobre él, como una cabeza real.
+  g.translate(0.08, -1.185, 0.1);
+  g.scale(K, K, K);
+  g.translate(0, 0.2, 0);
+
+  const pos = g.attributes.position;
+  const idx = g.index!.array;
+  const keep: number[] = [];
+  for (let t = 0; t < idx.length; t += 3) {
+    const a = idx[t], b = idx[t + 1], c = idx[t + 2];
+    if (Math.min(pos.getY(a), pos.getY(b), pos.getY(c)) >= CUT) keep.push(a, b, c);
+  }
+  g.setIndex(keep);
+
+  const col = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const f = smooth(FADE_END, FADE_TOP, pos.getY(i));
+    col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = f;
+  }
+  g.setAttribute("color", new THREE.BufferAttribute(col, 3));
   g.computeBoundingSphere();
+  headGeo = g;
   return g;
 }
 
-interface HeadAsset {
-  data: HeadData;
-  geometry: THREE.BufferGeometry;
+interface SkinMaps {
+  map: THREE.Texture;
+  normal: THREE.Texture;
+  spec: THREE.Texture;
 }
-
-const headCache = new Map<string, HeadAsset>();
-function getHead(variant: number, rings: number, segs: number): HeadAsset {
-  const key = `${variant}-${rings}-${segs}`;
-  let a = headCache.get(key);
-  if (!a) {
-    const data = buildHead(HEAD_VARIANTS[variant % HEAD_VARIANTS.length], rings, segs);
-    a = { data, geometry: toGeometry(data) };
-    headCache.set(key, a);
+let skinMaps: SkinMaps | null = null;
+function getSkinMaps(): SkinMaps {
+  if (!skinMaps) {
+    const loader = new THREE.TextureLoader();
+    const load = (file: string, srgb: boolean) => {
+      const t = loader.load(`${BASE}/${file}`);
+      t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+      t.anisotropy = 8;
+      return t;
+    };
+    skinMaps = {
+      map: load("Map-COL.jpg", true),
+      normal: load("Infinite-Level_02_Tangent_SmoothUV.jpg", false),
+      spec: load("Map-SPEC.jpg", true),
+    };
   }
-  return a;
-}
-
-let earGeo: THREE.BufferGeometry | null = null;
-const getEar = () => (earGeo ??= toGeometry(buildEar()));
-
-/** Cuello (cilindro) y hombros (revolución con pendiente de trapecio), ya con la escala horneada. */
-let bodyAsset: { neck: THREE.BufferGeometry; shoulders: THREE.BufferGeometry } | null = null;
-function getBody() {
-  if (!bodyAsset) {
-    const neck = new THREE.CylinderGeometry(0.31, 0.38, 1.1, 40, 1, true);
-    neck.scale(1, 1, 0.92);
-    neck.translate(0, 0.05, NECK_Z);
-
-    const profile = new THREE.SplineCurve(
-      [
-        [0.001, -1.42], [0.9, -1.4], [1.38, -1.3], [1.56, -1.12], [1.5, -0.95],
-        [1.15, -0.8], [0.76, -0.66], [0.46, -0.55], [0.27, -0.46],
-      ].map(([r, y]) => new THREE.Vector2(r, y))
-    ).getPoints(72);
-    const shoulders = new THREE.LatheGeometry(profile, 72);
-    shoulders.scale(1, 1, 0.55);
-    shoulders.translate(0, 0, NECK_Z);
-    bodyAsset = { neck, shoulders };
-  }
-  return bodyAsset;
+  return skinMaps;
 }
 
 /* ------------------------------------------------------------------ */
-/* Material                                                            */
+/* Material de piel                                                    */
 /* ------------------------------------------------------------------ */
 
 /**
- * Luz de contorno (rim) direccional por fresnel, inyectada como emisión: es lo que recorta la silueta
- * con ese borde rojo/cian de la referencia, independientemente de las luces de la escena.
+ * Luz de contorno (rim) por fresnel, inyectada como emisión: recorta la silueta con el borde
+ * cálido/frío de la referencia sin depender de las luces de la escena. Se apaga junto con el cuello.
  */
 function addRim(mat: THREE.MeshPhysicalMaterial, a: THREE.Color, b: THREE.Color, rimI: { value: number }) {
   mat.onBeforeCompile = (shader) => {
@@ -110,89 +124,73 @@ function addRim(mat: THREE.MeshPhysicalMaterial, a: THREE.Color, b: THREE.Color,
         `#include <emissivemap_fragment>
         {
           vec3 rn = normalize(normal);
-          float rf = pow(1.0 - saturate(dot(rn, normalize(vViewPosition))), 2.4);
+          float rf = pow(1.0 - saturate(dot(rn, normalize(vViewPosition))), 2.6);
           vec3 dA = normalize((viewMatrix * vec4(0.85, 0.55, -0.45, 0.0)).xyz);
           vec3 dB = normalize((viewMatrix * vec4(-0.9, 0.2, -0.35, 0.0)).xyz);
           float la = smoothstep(-0.1, 0.7, dot(rn, dA));
           float lb = smoothstep(-0.1, 0.7, dot(rn, dB));
-          totalEmissiveRadiance += (uRimA * la * 1.7 + uRimB * lb * 0.8) * rf * uRimI;
+          float fd = 1.0;
+          #ifdef USE_COLOR
+            fd = vColor.r;
+          #endif
+          totalEmissiveRadiance += (uRimA * la * 1.5 + uRimB * lb * 0.55) * rf * uRimI * fd;
         }`
       );
   };
-  mat.customProgramCacheKey = () => "bust-rim-v1";
+  mat.customProgramCacheKey = () => "head-rim-v1";
 }
 
-function makeBodyMaterial(theme: BustTheme, rimI: { value: number }, maps?: { bump: THREE.Texture; emissive: THREE.Texture }) {
-  const base = {
-    color: theme.body,
-    clearcoat: 0.55,
-    clearcoatRoughness: 0.22,
-    envMapIntensity: 1.3,
-  };
-  const mat =
-    theme.kind === "holo"
-      ? new THREE.MeshPhysicalMaterial({ ...base, metalness: 0.95, roughness: 0.2, iridescence: 1, iridescenceIOR: 1.6, clearcoat: 1, clearcoatRoughness: 0.1 })
-      : theme.kind === "geo"
-        ? new THREE.MeshPhysicalMaterial({ ...base, metalness: 0.85, roughness: 0.36, flatShading: true })
-        : new THREE.MeshPhysicalMaterial({ ...base, metalness: 0.92, roughness: 0.3 });
-
-  if (maps) {
-    mat.emissive = new THREE.Color("#ffffff");
-    mat.emissiveMap = maps.emissive;
-    mat.emissiveIntensity = 2.2;
-    if (theme.kind !== "geo") {
-      mat.bumpMap = maps.bump;
-      mat.bumpScale = 1.5;
-    }
-  }
+function makeSkinMaterial(theme: BustTheme, rimI: { value: number }) {
+  const m = getSkinMaps();
+  const mat = new THREE.MeshPhysicalMaterial({
+    color: theme.skin,
+    map: m.map,
+    normalMap: m.normal,
+    normalScale: new THREE.Vector2(1.1, 1.1),
+    specularColorMap: m.spec,
+    specularIntensity: 1,
+    metalness: 0,
+    roughness: 0.52,
+    clearcoat: 0.12,
+    clearcoatRoughness: 0.45,
+    sheen: 0.6, // vello suave de la piel
+    sheenRoughness: 0.5,
+    sheenColor: new THREE.Color("#ffb59a"),
+    envMapIntensity: 0.9,
+    vertexColors: true,
+  });
   addRim(mat, new THREE.Color(theme.b), new THREE.Color(theme.a), rimI);
   return mat;
 }
 
-/* ------------------------------------------------------------------ */
-/* Detalles sobre la superficie (placas y pistas)                       */
-/* ------------------------------------------------------------------ */
-
-const _o = new THREE.Object3D();
-const _z = new THREE.Vector3(0, 0, 1);
-const _n = new THREE.Vector3();
-
-function toMatrices(
-  samples: SurfaceSample[],
-  offset: [number, number, number],
-  seed: number,
-  size: (rnd: () => number) => [number, number, number],
-  lift: (depth: number) => number
-): THREE.Matrix4[] {
-  const rnd = rng(seed);
-  return samples.map(({ p, n }) => {
-    const [sx, sy, sz] = size(rnd);
-    const l = lift(sz);
-    _o.position.set(p[0] + n[0] * l + offset[0], p[1] + n[1] * l + offset[1], p[2] + n[2] * l + offset[2]);
-    _n.set(n[0], n[1], n[2]);
-    _o.quaternion.setFromUnitVectors(_z, _n);
-    _o.rotateZ(Math.floor(rnd() * 4) * (Math.PI / 2) + (rnd() - 0.5) * 0.3);
-    _o.scale.set(sx, sy, sz);
-    _o.updateMatrix();
-    return _o.matrix.clone();
-  });
+/** Halo difuso que se pega detrás de la cabeza: la luz cálida "rebotando" en el fondo. */
+let glowTex: THREE.CanvasTexture | null = null;
+function getGlow() {
+  if (!glowTex) {
+    const c = document.createElement("canvas");
+    c.width = c.height = 256;
+    const g = c.getContext("2d")!;
+    const gr = g.createRadialGradient(128, 128, 0, 128, 128, 128);
+    gr.addColorStop(0, "rgba(255,255,255,1)");
+    gr.addColorStop(0.35, "rgba(255,255,255,0.35)");
+    gr.addColorStop(1, "rgba(255,255,255,0)");
+    g.fillStyle = gr;
+    g.fillRect(0, 0, 256, 256);
+    glowTex = new THREE.CanvasTexture(c);
+  }
+  return glowTex;
 }
-
-const inFace = (p: [number, number, number]) => p[2] > 0.12 && Math.abs(p[0]) < 0.55 && p[1] > -0.98 && p[1] < 0.64;
-const inEar = (p: [number, number, number]) => Math.abs(p[0]) > 0.58 && Math.abs(p[1] + 0.12) < 0.34 && p[2] < 0.1;
 
 /* ------------------------------------------------------------------ */
 
 const moved = (a: BustTarget, b: BustTarget) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.s - b.s) * 3 > 0.3;
 
-export default function Bust({ theme, index, target, intensity, mouse, hovered, interactive, showLabel, lowPower, onHover, onSelect }: Props) {
+export default function Bust({ theme, index, target, intensity, mouse, hovered, interactive, showLabel, onHover, onSelect }: Props) {
   const root = useRef<THREE.Group>(null);
-  const ringA = useRef<THREE.Mesh>(null);
-  const ringB = useRef<THREE.Mesh>(null);
+  const glowMat = useRef<THREE.SpriteMaterial>(null);
   const lightA = useRef<THREE.PointLight>(null);
   const lightB = useRef<THREE.PointLight>(null);
-  const darkRef = useRef<THREE.InstancedMesh>(null);
-  const glowRef = useRef<THREE.InstancedMesh>(null);
+  const lightC = useRef<THREE.PointLight>(null);
 
   // Estado de movimiento: cada propiedad es un amortiguador, así que acelera y frena sin tirones.
   const motion = useRef({
@@ -207,73 +205,13 @@ export default function Bust({ theme, index, target, intensity, mouse, hovered, 
     wait: 0,
   });
 
-  const colA = useMemo(() => new THREE.Color(theme.a).multiplyScalar(2.2), [theme.a]);
-  const colB = useMemo(() => new THREE.Color(theme.b).multiplyScalar(2.2), [theme.b]);
-
   const rimI = useMemo(() => ({ value: 1 }), []);
-  const detail = lowPower ? { rings: 120, segs: 104 } : { rings: 220, segs: 192 };
-  const faceted = theme.kind === "geo";
+  const gltf = useGLTF(HEAD_URL) as unknown as { nodes: Record<string, THREE.Mesh> };
+  const geometry = useMemo(() => prepareHead(gltf.nodes.LeePerrySmith.geometry), [gltf]);
+  const material = useMemo(() => makeSkinMaterial(theme, rimI), [theme, rimI]);
+  const glow = useMemo(() => getGlow(), []);
 
-  const head = useMemo(() => (faceted ? getHead(index, 72, 64) : getHead(index, detail.rings, detail.segs)), [faceted, index, detail.rings, detail.segs]);
-  const wire = useMemo(() => (theme.kind === "holo" ? getHead(index, 44, 40).geometry : null), [theme.kind, index]);
-  const ear = getEar();
-  const body = getBody();
-  const earPos = useMemo(() => earAnchor(HEAD_VARIANTS[index % HEAD_VARIANTS.length]), [index]);
-
-  const skin = useMemo(() => makeSkinTextures(theme.a, theme.b, theme.seed, lowPower ? 512 : 1024, lowPower ? 256 : 512), [theme.a, theme.b, theme.seed, lowPower]);
-  const material = useMemo(() => makeBodyMaterial(theme, rimI, skin), [theme, rimI, skin]);
-
-  useEffect(
-    () => () => {
-      material.dispose();
-      skin.bump.dispose();
-      skin.emissive.dispose();
-    },
-    [material, skin]
-  );
-
-  const { dark, glow } = useMemo(() => {
-    const n = lowPower ? 0.5 : 1;
-    const hd = head.data;
-    const accept = (p: [number, number, number], nn: [number, number, number]) => !inFace(p) && !inEar(p) && nn[1] > -0.55;
-    const off: [number, number, number] = [0, HEAD_Y, 0];
-
-    const sh = body.shoulders.attributes;
-    const shAccept = (_p: [number, number, number], nn: [number, number, number]) => nn[1] > -0.1;
-    const plateSize = (r: () => number): [number, number, number] => [0.05 + r() * 0.17, 0.03 + r() * 0.11, 0.008 + r() * 0.022];
-    const traceSize = (r: () => number): [number, number, number] => [0.12 + r() * 0.4, 0.012, 0.012];
-    const lp = (d: number) => d * 0.5 - 0.004;
-
-    const plates = [
-      ...toMatrices(sampleSurface(hd.positions, hd.normals, hd.indices, Math.round(300 * n), theme.seed, accept), off, theme.seed + 1, plateSize, lp),
-      ...toMatrices(
-        sampleSurface(sh.position.array, sh.normal.array, body.shoulders.index!.array, Math.round(110 * n), theme.seed + 7, shAccept),
-        [0, 0, 0], theme.seed + 2, plateSize, lp
-      ),
-    ];
-    const traces = [
-      ...toMatrices(sampleSurface(hd.positions, hd.normals, hd.indices, Math.round(120 * n), theme.seed + 13, accept), off, theme.seed + 3, traceSize, () => 0.004),
-      ...toMatrices(
-        sampleSurface(sh.position.array, sh.normal.array, body.shoulders.index!.array, Math.round(40 * n), theme.seed + 17, shAccept),
-        [0, 0, 0], theme.seed + 4, traceSize, () => 0.004
-      ),
-    ];
-    return { dark: plates, glow: traces };
-  }, [head, body, theme.seed, lowPower]);
-
-  useLayoutEffect(() => {
-    const d = darkRef.current;
-    const g = glowRef.current;
-    if (!d || !g) return;
-    dark.forEach((m, i) => d.setMatrixAt(i, m));
-    d.instanceMatrix.needsUpdate = true;
-    glow.forEach((m, i) => {
-      g.setMatrixAt(i, m);
-      g.setColorAt(i, i % 3 === 0 ? colB : colA);
-    });
-    g.instanceMatrix.needsUpdate = true;
-    if (g.instanceColor) g.instanceColor.needsUpdate = true;
-  }, [dark, glow, colA, colB]);
+  useEffect(() => () => material.dispose(), [material]);
 
   useFrame((state, rawDt) => {
     const g = root.current;
@@ -281,7 +219,7 @@ export default function Bust({ theme, index, target, intensity, mouse, hovered, 
     const dt = clampDt(rawDt);
     const m = motion.current;
 
-    // Cuando cambia la escena, cada busto arranca con un pequeño retraso (efecto escalonado).
+    // Cuando cambia la escena, cada cabeza arranca con un pequeño retraso (efecto escalonado).
     if (target !== m.pending) {
       m.wait = moved(target, m.goal) ? index * 0.07 : 0;
       m.pending = target;
@@ -305,22 +243,19 @@ export default function Bust({ theme, index, target, intensity, mouse, hovered, 
 
     const t = state.clock.elapsedTime;
     const mo = mouse.current;
-    g.position.set(px, py + Math.sin(t * 0.9 + index * 1.7) * 0.07 * Math.max(s, 0.4), pz);
+    g.position.set(px, py + Math.sin(t * 0.9 + index * 1.7) * 0.05 * Math.max(s, 0.4), pz);
     g.scale.setScalar(s);
     g.rotation.y = pry + mo.x * 0.5 + Math.sin(t * 0.35 + index) * 0.1 + hov * Math.sin(t * 1.4) * 0.05;
     g.rotation.x = -mo.y * 0.16 + hov * Math.sin(t * 1.1) * 0.015;
 
-    if (ringA.current) ringA.current.rotation.z = t * 0.45 + index;
-    if (ringB.current) ringB.current.rotation.z = -t * 0.3 + index;
-
     const I = intensity.current * (1 + hov * 1.3);
     rimI.value = 0.35 + 0.65 * Math.min(intensity.current, 1.1) + hov * 0.6;
     const sq = s * s; // compensa la caída de luz al escalar el grupo
-    if (lightA.current) lightA.current.intensity = 34 * I * sq;
-    if (lightB.current) lightB.current.intensity = 40 * I * sq;
+    if (lightA.current) lightA.current.intensity = 30 * I * sq; // luz principal suave, desde el frente
+    if (lightB.current) lightB.current.intensity = 80 * I * sq; // contraluz cálido
+    if (lightC.current) lightC.current.intensity = 18 * I * sq; // contraluz frío
+    if (glowMat.current) glowMat.current.opacity = 0.2 * Math.min(intensity.current, 1.1) * (1 + hov * 0.9);
   });
-
-  const earRot = (sx: number): [number, number, number] => [-0.17, -sx * 0.32, sx * 0.04];
 
   return (
     <group
@@ -339,58 +274,23 @@ export default function Bust({ theme, index, target, intensity, mouse, hovered, 
         onSelect(index + 1);
       }}
     >
-      {/* Cabeza, orejas, cuello y hombros */}
-      <mesh geometry={head.geometry} material={material} position={[0, HEAD_Y, 0]} />
-      {[-1, 1].map((sx) => (
-        <mesh key={sx} geometry={ear} material={material} position={[sx * earPos[0], HEAD_Y + earPos[1], earPos[2]]} rotation={earRot(sx)} scale={[sx, 1, 1]} />
-      ))}
-      <mesh geometry={body.neck} material={material} />
-      <mesh geometry={body.shoulders} material={material} />
+      <mesh geometry={geometry} material={material} scale={theme.shape} />
 
-      {/* Collar luminoso */}
-      <mesh position={[0, -0.42, NECK_Z]} rotation={[Math.PI / 2, 0, 0]} scale={[1, 0.9, 1]}>
-        <torusGeometry args={[0.47, 0.03, 12, 56]} />
-        <meshBasicMaterial color={colA} toneMapped={false} />
-      </mesh>
+      {/* Halo cálido detrás de la cabeza */}
+      <sprite position={[0.5, HEAD_Y, -1.4]} scale={[4.8, 4.8, 1]} raycast={() => null}>
+        <spriteMaterial ref={glowMat} map={glow} color={theme.b} transparent opacity={0} blending={THREE.AdditiveBlending} depthWrite={false} toneMapped={false} />
+      </sprite>
 
-      {/* Malla holográfica */}
-      {wire && (
-        <mesh geometry={wire} position={[0, HEAD_Y, 0]} scale={1.012}>
-          <meshBasicMaterial color={colA} wireframe transparent opacity={0.16} toneMapped={false} depthWrite={false} />
-        </mesh>
-      )}
-
-      {/* Anillos orbitales */}
-      <mesh ref={ringA} position={[0, HEAD_Y, -0.1]} rotation={[Math.PI / 2.2, 0, 0]}>
-        <torusGeometry args={[1.55, 0.01, 8, 128]} />
-        <meshBasicMaterial color={colA} transparent opacity={0.7} toneMapped={false} />
-      </mesh>
-      <mesh ref={ringB} position={[0, HEAD_Y, -0.1]} rotation={[Math.PI / 3, 0.6, 0]}>
-        <torusGeometry args={[1.95, 0.007, 8, 128]} />
-        <meshBasicMaterial color={colB} transparent opacity={0.55} toneMapped={false} />
-      </mesh>
-
-      {/* Placas y circuitos en relieve sobre la superficie */}
-      <instancedMesh ref={darkRef} args={[undefined, undefined, dark.length]} frustumCulled={false}>
-        <boxGeometry args={[1, 1, 1]} />
-        <meshStandardMaterial color="#16222d" metalness={0.9} roughness={0.38} />
-      </instancedMesh>
-      <instancedMesh ref={glowRef} args={[undefined, undefined, glow.length]} frustumCulled={false}>
-        <boxGeometry args={[1, 1, 1]} />
-        <meshBasicMaterial color="#ffffff" toneMapped={false} />
-      </instancedMesh>
-
-      {/* Iluminación neón propia */}
-      <pointLight ref={lightA} color={theme.a} position={[-2.4, 1.8, 2.4]} intensity={30} decay={2} />
-      <pointLight ref={lightB} color={theme.b} position={[2.6, 1.6, -2]} intensity={30} decay={2} />
-
-      <Sparkles count={lowPower ? 12 : 30} scale={[4.2, 4.6, 3.5]} size={4} speed={0.35} opacity={0.9} color={theme.a} position={[0, 0.5, 0]} />
+      {/* Iluminación propia: luz principal suave al frente, contraluz cálido (derecha) y frío (izquierda) */}
+      <pointLight ref={lightA} color="#fff1e6" position={[-2.2, 1.6, 3]} intensity={30} decay={2} />
+      <pointLight ref={lightB} color={theme.b} position={[2.6, 1.4, -2]} intensity={80} decay={2} />
+      <pointLight ref={lightC} color={theme.a} position={[-2.8, 1.1, -2.2]} intensity={18} decay={2} />
 
       {showLabel && (
-        <Html center position={[0, -1.7, 0]} style={{ pointerEvents: "none" }} zIndexRange={[5, 0]}>
+        <Html center position={[0, -1.6, 0]} style={{ pointerEvents: "none" }} zIndexRange={[5, 0]}>
           <div className={`bust-tag ${hovered ? "on" : ""}`} style={{ ["--c" as string]: theme.a }}>
-            <span>INTERVIEW_0{index + 1}</span>
-            <em>ENTREVISTADO 0{index + 1}</em>
+            <span>ENTREVISTADO 0{index + 1}</span>
+            <em>VER RESPUESTAS</em>
           </div>
         </Html>
       )}

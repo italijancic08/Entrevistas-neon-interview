@@ -7,7 +7,6 @@ import { FIRST_QUESTION, LAST, STEPS, type Mode, type View } from "@/lib/steps";
 import type { InterviewerId } from "@/data/interviews";
 import { useDevice } from "@/hooks/useDevice";
 import Hud from "./Hud";
-import Cursor from "@/components/ui/Cursor";
 import Loader from "@/components/ui/Loader";
 import IntroScene from "@/components/scenes/IntroScene";
 import InterviewersScene from "@/components/scenes/InterviewersScene";
@@ -32,7 +31,6 @@ export default function Presentation() {
   const commitRef = useRef<(patch: Partial<View>, dir: number) => void>(() => {});
   const dirRef = useRef(1);
   const overlayRef = useRef<HTMLDivElement>(null);
-  const coordRef = useRef<HTMLSpanElement>(null);
   const reducedRef = useRef(device.reduced);
 
   useEffect(() => {
@@ -162,41 +160,6 @@ export default function Presentation() {
     };
   }, [next, prev, goTo]);
 
-  // Parallax del título y coordenadas decorativas. El puntero solo fija el objetivo; un bucle lo
-  // sigue con suavizado independiente de los FPS (antes cada evento del mouse saltaba de golpe).
-  useEffect(() => {
-    const target = { x: 0, y: 0 };
-    const cur = { x: 0, y: 0 };
-    let raf = 0;
-    let last = performance.now();
-    let title: HTMLElement | null = null;
-
-    const h = (e: PointerEvent) => {
-      target.x = (e.clientX / window.innerWidth) * 2 - 1;
-      target.y = (e.clientY / window.innerHeight) * 2 - 1;
-      if (coordRef.current) coordRef.current.textContent = `X ${target.x.toFixed(2)} · Y ${(-target.y).toFixed(2)}`;
-    };
-    const loop = (now: number) => {
-      const dt = Math.min(0.05, (now - last) / 1000);
-      last = now;
-      const k = 1 - Math.exp(-dt * 7);
-      cur.x += (target.x - cur.x) * k;
-      cur.y += (target.y - cur.y) * k;
-      if (!title || !title.isConnected) title = document.querySelector<HTMLElement>(".title-3d");
-      if (title) {
-        title.style.setProperty("--mx", cur.x.toFixed(4));
-        title.style.setProperty("--my", cur.y.toFixed(4));
-      }
-      raf = requestAnimationFrame(loop);
-    };
-    window.addEventListener("pointermove", h);
-    raf = requestAnimationFrame(loop);
-    return () => {
-      window.removeEventListener("pointermove", h);
-      cancelAnimationFrame(raf);
-    };
-  }, []);
-
   // Al cambiar el contenido visible, se restablece el contenedor (la entrada la anima cada escena)
   useLayoutEffect(() => {
     const el = overlayRef.current;
@@ -232,21 +195,13 @@ export default function Presentation() {
     <div className="fixed inset-0 overflow-hidden bg-bg">
       <Stage view={view} dirRef={dirRef} device={device} hovered={hover} onHover={handleHover} onSelect={selectInterviewer} />
 
-      <div className="fx-nebula" />
-      <div className="fx-vig" />
-      <div className="fx-scan" />
-      <div className="fx-line" style={{ top: "22%" }} />
-      <div className="fx-line m" style={{ top: "61%", animationDelay: "-3s" }} />
-      <div className="fx-line" style={{ top: "83%", animationDelay: "-5s" }} />
-
       <div ref={overlayRef} className="pointer-events-none absolute inset-0 z-10">
         <div key={`${shown.step}-${shown.mode}-${shown.selected}`} className="absolute inset-0">
           {scene}
         </div>
       </div>
 
-      <Hud step={view.step} mode={view.mode} onMode={setMode} onGo={(i) => goTo(i)} onPrev={prev} onNext={next} coordRef={coordRef} />
-      <Cursor />
+      <Hud step={view.step} mode={view.mode} onMode={setMode} onGo={(i) => goTo(i)} onPrev={prev} onNext={next} />
     </div>
   );
 }

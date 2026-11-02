@@ -24,4 +24,4 @@ export const STEPS: Step[] = [
 ];
 
 export const FIRST_QUESTION = 2;
-export const LAST = STEPS.length - 1;
+export const LAST = STEPS.length - 1;export const FIRST_CONCLUSION = STEPS.findIndex((s) => s.kind === "conclusion");

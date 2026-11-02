@@ -1,36 +1,28 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# NEON INTERVIEW — Relevamiento de datos
 
-## Getting Started
+Presentación interactiva (Next.js + React Three Fiber) con tres entrevistados, ocho preguntas y conclusiones.
+UTN Facultad Regional Reconquista — Gestión de Desarrollo de Software.
 
-First, run the development server:
+## Desarrollo
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
+npm run dev   # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Navegación: flechas del teclado, rueda, gestos táctiles, el menú superior o los puntos del pie.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Diseño
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- **Estilo**: plano y minimalista, fondo azul-petróleo oscuro (`#0b171e`), acento rojo (`#e5484d`), tarjetas translúcidas y botones en píldora.
+- **Tipografía**: Montserrat (etiquetas y titulares, muy espaciados) y Raleway (texto).
+- **Cabezas** (`components/three/Bust.tsx`): escaneo 3D de una cabeza humana real (`public/models/head/`), con textura de piel,
+  mapa de normales y de especular. Se recorta en el cuello (sin hombros) y se apaga a oscuro hacia abajo. Cada entrevistado cambia
+  de tono de piel y proporciones en `lib/theme.ts`. Iluminación desde atrás: contraluz cálido a la derecha, frío a la izquierda,
+  borde (fresnel) emisivo y un halo difuso detrás.
+- **Palabra fantasma** (`components/three/Ghost.tsx`): título gigante en contorno al fondo de la escena, distinto según la escena.
 
-## Learn More
+## Créditos
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Escaneo de cabeza «Infinite» 3D Head Scan por Lee Perry-Smith, licencia CC BY 3.0 (www.triplegangers.com).
+Ver `public/models/head/LICENSE.txt`.

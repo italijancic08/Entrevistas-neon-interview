@@ -1,13 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Environment, Float, Grid, Lightformer, PerformanceMonitor, Sparkles } from "@react-three/drei";
-import { Bloom, EffectComposer, ToneMapping, Vignette } from "@react-three/postprocessing";
+import { Environment, Lightformer, PerformanceMonitor } from "@react-three/drei";
+import { Bloom, EffectComposer, ToneMapping } from "@react-three/postprocessing";
 import { ToneMappingMode } from "postprocessing";
 import * as THREE from "three";
 import Bust, { type BustTarget } from "./Bust";
-import { THEMES } from "@/lib/theme";
+import Ghost from "./Ghost";
+import { BG, THEMES } from "@/lib/theme";
 import { STEPS, type Step, type View } from "@/lib/steps";
 import type { Device } from "@/hooks/useDevice";
 import { Damped, bell, clampDt, damp } from "@/lib/motion";
@@ -71,24 +72,6 @@ function computeLayout(step: Step, view: View, visW: number, visH: number, portr
   }
 }
 
-const DECOR: { p: [number, number, number]; s: number; k: number; c: string }[] = [
-  { p: [-7, 2.2, -6], s: 0.7, k: 0, c: "#00E5FF" },
-  { p: [7.5, -0.5, -7], s: 0.9, k: 1, c: "#FF315F" },
-  { p: [-5, -1.2, -8], s: 0.6, k: 2, c: "#8B5CF6" },
-  { p: [4.5, 3, -9], s: 0.8, k: 3, c: "#00E5FF" },
-  { p: [-9, 0.5, -10], s: 1.1, k: 1, c: "#8B5CF6" },
-  { p: [9, 2.6, -11], s: 0.7, k: 0, c: "#FF315F" },
-];
-
-function DecorShape({ k }: { k: number }) {
-  switch (k) {
-    case 0: return <octahedronGeometry args={[1, 0]} />;
-    case 1: return <icosahedronGeometry args={[1, 0]} />;
-    case 2: return <torusGeometry args={[1, 0.08, 8, 40]} />;
-    default: return <boxGeometry args={[1.4, 1.4, 1.4]} />;
-  }
-}
-
 interface WorldProps {
   view: View;
   dirRef: RefObject<number>;
@@ -112,7 +95,6 @@ function World({ view, dirRef, device, hovered, onHover, onSelect, mouse }: Worl
   const intensityRef = useRef(1);
   const enteredAt = useRef(0);
   const kickFrom = useRef(-1e9);
-  const gridRef = useRef<THREE.Mesh>(null);
 
   // El mouse llega a saltos; se filtra antes de usarlo para mover busto y cámara.
   const smoothMouse = useRef({ x: 0, y: 0 });
@@ -158,47 +140,21 @@ function World({ view, dirRef, device, hovered, onHover, onSelect, mouse }: Worl
     intensityRef.current += (ti - intensityRef.current) * damp(2, dt);
     state.scene.environmentIntensity = 0.25 + 0.75 * intensityRef.current;
 
-    if (gridRef.current) gridRef.current.position.z = (state.clock.elapsedTime * 0.5) % 3;
   });
-
-  const decor = device.lowPower ? DECOR.slice(0, 3) : DECOR;
 
   return (
     <>
-      <ambientLight intensity={0.12} />
+      <ambientLight intensity={0.15} />
       <Environment resolution={256}>
-        <Lightformer form="rect" intensity={4} color="#00E5FF" position={[-5, 2, -3]} scale={[8, 3, 1]} />
-        <Lightformer form="rect" intensity={5} color="#FF315F" position={[5, 1, -4]} scale={[6, 4, 1]} />
-        <Lightformer form="ring" intensity={2} color="#8B5CF6" position={[0, 4, 2]} scale={4} />
-        <Lightformer form="rect" intensity={1.2} color="#EAF7FF" position={[0, 1, 6]} scale={[10, 2, 1]} />
+        {/* Contraluz cálido grande (derecha, atrás), contraluz frío (izquierda, atrás) y un relleno frontal tenue */}
+        <Lightformer form="rect" intensity={5} color="#FF4A3D" position={[5, 1.5, -4.5]} scale={[5, 6, 1]} />
+        <Lightformer form="rect" intensity={3} color="#6FD3E8" position={[-5.5, 2, -4]} scale={[5, 4, 1]} />
+        <Lightformer form="rect" intensity={0.9} color="#EAF7FF" position={[-2, 3, 6]} scale={[8, 2, 1]} />
       </Environment>
 
-      <Grid
-        ref={gridRef}
-        position={[0, -2.5, 0]}
-        args={[60, 60]}
-        cellSize={0.5}
-        cellThickness={0.6}
-        cellColor="#0a4b5c"
-        sectionSize={3}
-        sectionThickness={1.1}
-        sectionColor="#FF315F"
-        fadeDistance={26}
-        fadeStrength={1.5}
-      />
+      <Ghost kind={step.kind} camZ={camZ} />
 
-      <Sparkles count={device.lowPower ? 60 : 160} scale={[16, 9, 10]} size={2.2} speed={0.25} color="#EAF7FF" opacity={0.7} position={[0, 0.5, -2]} />
-      <Sparkles count={device.lowPower ? 20 : 60} scale={[14, 8, 8]} size={3} speed={0.3} color="#00E5FF" opacity={0.8} position={[0, 0.5, -3]} />
-
-      {decor.map((d, i) => (
-        <Float key={i} speed={1 + i * 0.2} rotationIntensity={1.2} floatIntensity={1.5} position={d.p}>
-          <mesh scale={d.s}>
-            <DecorShape k={d.k} />
-            <meshBasicMaterial wireframe color={d.c} transparent opacity={0.35} toneMapped={false} />
-          </mesh>
-        </Float>
-      ))}
-
+      <Suspense fallback={null}>
       {busts.map((t, i) => (
         <Bust
           key={i}
@@ -215,12 +171,12 @@ function World({ view, dirRef, device, hovered, onHover, onSelect, mouse }: Worl
           onSelect={onSelect}
         />
       ))}
+      </Suspense>
 
       {!device.lowPower && (
         <EffectComposer multisampling={4}>
-          <Bloom intensity={0.9} luminanceThreshold={0.85} luminanceSmoothing={0.2} mipmapBlur />
+          <Bloom intensity={1.1} luminanceThreshold={0.8} luminanceSmoothing={0.2} mipmapBlur />
           <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
-          <Vignette offset={0.2} darkness={0.8} />
         </EffectComposer>
       )}
     </>
@@ -259,8 +215,7 @@ export default function Stage({ view, dirRef, device, hovered, onHover, onSelect
         camera={{ fov: 40, position: [0, 0, 7], near: 0.1, far: 80 }}
         gl={{ antialias: !device.lowPower, powerPreference: "high-performance" }}
       >
-        <color attach="background" args={["#071018"]} />
-        <fog attach="fog" args={["#071018", 10, 28]} />
+        <color attach="background" args={[BG]} />
         {/* Si los FPS caen, baja la resolución de forma gradual para mantener el movimiento fluido */}
         <PerformanceMonitor onChange={({ factor }) => setDpr(Math.round((1 + (maxDpr - 1) * factor) * 8) / 8)} />
         <World view={view} dirRef={dirRef} device={device} hovered={hovered} onHover={onHover} onSelect={select} mouse={mouse} />

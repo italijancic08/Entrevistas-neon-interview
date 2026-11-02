@@ -57,7 +57,7 @@ export function makeSkinTextures(colorA: string, colorB: string, seed: number, W
   b.fillStyle = "#808080";
   b.fillRect(0, 0, W, H);
 
-  for (let i = 0; i < 320; i++) {
+  for (let i = 0; i < 110; i++) {
     const w = (1 + Math.floor(rnd() * 8)) * cell;
     const h = (1 + Math.floor(rnd() * 4)) * cell;
     const x = Math.floor((rnd() * W) / cell) * cell;
@@ -73,13 +73,13 @@ export function makeSkinTextures(colorA: string, colorB: string, seed: number, W
   b.fillStyle = "#e4e4e4";
   b.lineWidth = 3;
   b.lineJoin = "round";
-  for (let i = 0; i < 170; i++) {
+  for (let i = 0; i < 60; i++) {
     const [ex, ey] = trace(b, rnd, rnd() * W, rnd() * H, 3 + Math.floor(rnd() * 3), cell * 1.5);
     b.beginPath();
     b.arc(ex, ey, 4.5, 0, Math.PI * 2);
     b.fill();
   }
-  for (let i = 0; i < 5000; i++) {
+  for (let i = 0; i < 2500; i++) {
     const g = 128 + (rnd() - 0.5) * 36;
     b.fillStyle = `rgb(${g},${g},${g})`;
     b.fillRect(rnd() * W, rnd() * H, 1 + rnd() * 2, 1 + rnd() * 2);
@@ -95,14 +95,14 @@ export function makeSkinTextures(colorA: string, colorB: string, seed: number, W
   e.fillRect(0, 0, W, H);
   e.lineJoin = "round";
   e.lineCap = "round";
-  const palette = [colorA, colorB, "#ffffff", "#ffffff"];
-  for (let i = 0; i < 110; i++) {
+  const palette = [colorA, colorA, "#ffffff", colorB];
+  for (let i = 0; i < 16; i++) {
     const c = palette[Math.floor(rnd() * palette.length)];
     e.strokeStyle = c;
     e.fillStyle = c;
     e.shadowColor = c;
     e.shadowBlur = 6;
-    e.lineWidth = 1.5 + rnd() * 1.8;
+    e.lineWidth = 1 + rnd() * 0.8;
     const [ex, ey] = trace(e, rnd, rnd() * W, rnd() * H, 2 + Math.floor(rnd() * 4), cell * (1 + rnd() * 2));
     if (rnd() < 0.6) {
       e.beginPath();
@@ -112,7 +112,7 @@ export function makeSkinTextures(colorA: string, colorB: string, seed: number, W
   }
   // Grupos de glifos: pequeños marcos que recuerdan a los símbolos grabados de la referencia
   e.shadowBlur = 4;
-  for (let i = 0; i < 26; i++) {
+  for (let i = 0; i < 4; i++) {
     const c = palette[Math.floor(rnd() * palette.length)];
     e.strokeStyle = c;
     e.lineWidth = 1.5;
