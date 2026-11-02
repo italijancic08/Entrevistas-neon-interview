@@ -3,7 +3,11 @@
 import { useLayoutEffect, useRef } from "react";
 import gsap from "gsap";
 
-/** Anima la entrada de una escena: letras (.char) y bloques ([data-anim]). */
+/**
+ * Anima la entrada de una escena: letras (.char) y bloques ([data-anim]).
+ * Solo se animan opacity y transform (los dos únicos que la GPU resuelve sin recalcular layout ni
+ * repintar); el blur por letra/bloque se eliminó porque con decenas de elementos provocaba tirones.
+ */
 export function useSceneIntro() {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -19,16 +23,16 @@ export function useSceneIntro() {
         gsap.from(
           chars,
           heavy
-            ? { opacity: 0, y: 12, duration: 0.5, ease: "power2.out", stagger: Math.min(0.02, 1.4 / chars.length), clearProps: "opacity,transform" }
+            ? { opacity: 0, y: 10, duration: 0.55, ease: "power2.out", stagger: Math.min(0.012, 0.9 / chars.length), clearProps: "opacity,transform" }
             : {
-                opacity: 0, y: 70, rotateX: -90, z: -200, filter: "blur(10px)", transformPerspective: 700,
-                duration: 1, ease: "power4.out", stagger: 0.035, clearProps: "opacity,transform,filter",
+                opacity: 0, y: 46, rotateX: -65, transformPerspective: 800, transformOrigin: "50% 100%",
+                duration: 1.05, ease: "expo.out", stagger: Math.min(0.028, 0.75 / chars.length), clearProps: "opacity,transform",
               }
         );
       }
       gsap.from(el.querySelectorAll("[data-anim]"), {
-        opacity: 0, y: 36, filter: "blur(12px)", duration: 0.9, ease: "power3.out",
-        stagger: 0.12, delay: 0.15, clearProps: "opacity,transform,filter",
+        opacity: 0, y: 26, duration: 0.9, ease: "power3.out",
+        stagger: 0.08, delay: 0.12, clearProps: "opacity,transform",
       });
     }, el);
 

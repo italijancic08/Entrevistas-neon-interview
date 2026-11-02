@@ -7,6 +7,8 @@
   --magenta: #ff315f;
   --violet: #8b5cf6;
   --ice: #eaf7ff;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-io: cubic-bezier(0.65, 0, 0.35, 1);
 }
 
 @theme inline {
@@ -44,7 +46,7 @@ body {
     radial-gradient(40vmax 30vmax at 15% 20%, rgba(139, 92, 246, 0.22), transparent 70%),
     radial-gradient(35vmax 28vmax at 85% 75%, rgba(0, 229, 255, 0.16), transparent 70%),
     radial-gradient(30vmax 22vmax at 70% 15%, rgba(255, 49, 95, 0.12), transparent 70%);
-  animation: nebula 24s ease-in-out infinite alternate;
+  animation: nebula 24s ease-in-out infinite alternate; will-change: transform;
 }
 @keyframes nebula {
   from { transform: translate3d(-2%, -1%, 0) scale(1); }
@@ -61,7 +63,7 @@ body {
 .fx-scan::after {
   content: ""; position: absolute; left: 0; right: 0; height: 18vh; top: -20vh;
   background: linear-gradient(to bottom, transparent, rgba(0, 229, 255, 0.08), transparent);
-  animation: scanbar 9s linear infinite;
+  animation: scanbar 9s linear infinite; will-change: transform;
 }
 @keyframes scanbar { to { transform: translateY(130vh); } }
 .fx-line {
@@ -76,7 +78,7 @@ body {
 .title-3d {
   color: var(--ice);
   transform: perspective(1200px) rotateY(calc(var(--mx, 0) * 7deg)) rotateX(calc(var(--my, 0) * -5deg));
-  transition: transform 0.25s ease-out;
+  will-change: transform; /* el parallax lo suaviza un bucle en JS: sin transition para no suavizar dos veces */
   text-shadow:
     0 1px 0 #0b3a47, 0 2px 0 #0a3340, 0 3px 0 #092c37, 0 4px 0 #082530,
     0 5px 0 #071e28, 0 6px 0 #061820, 0 10px 20px rgba(0, 229, 255, 0.35), 0 0 44px rgba(0, 229, 255, 0.22);
@@ -99,25 +101,28 @@ body {
   background: linear-gradient(180deg, rgba(11, 27, 39, 0.88), rgba(7, 16, 24, 0.88));
   border: 1px solid color-mix(in srgb, var(--c) 70%, transparent);
   clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
-  transition: color 0.25s, border-color 0.25s;
+  transition: color 0.35s var(--ease-out), border-color 0.35s var(--ease-out), transform 0.45s var(--ease-out);
 }
 .neon-btn.sm { padding: 0.5rem 0.9rem; font-size: 0.7rem; }
 .neon-btn.magenta { --c: var(--magenta); }
 .neon-btn::before {
-  content: ""; position: absolute; inset: 0; opacity: 0; transition: opacity 0.25s;
+  content: ""; position: absolute; inset: 0; opacity: 0; transition: opacity 0.4s var(--ease-out);
   background: radial-gradient(120px circle at var(--mx, 50%) var(--my, 50%), color-mix(in srgb, var(--c) 45%, transparent), transparent 70%);
 }
 .neon-btn:hover, .neon-btn.is-active { color: #fff; border-color: var(--c); }
 .neon-btn:hover::before, .neon-btn.is-active::before { opacity: 1; }
 .neon-btn span { position: relative; }
+.neon-btn:hover:not(:disabled) { transform: translateY(-2px); }
+.neon-btn:active:not(:disabled) { transform: translateY(0) scale(0.97); transition-duration: 0.12s; }
 
 .nav-arrow {
   pointer-events: auto; cursor: pointer; width: 46px; height: 46px; border-radius: 50%;
   display: grid; place-items: center; color: var(--magenta);
   border: 1px solid rgba(255, 49, 95, 0.6); background: rgba(7, 16, 24, 0.6);
-  transition: background 0.25s, opacity 0.25s;
+  transition: background 0.35s var(--ease-out), opacity 0.35s var(--ease-out), transform 0.45s var(--ease-out);
 }
-.nav-arrow:hover:not(:disabled) { background: rgba(255, 49, 95, 0.18); }
+.nav-arrow:hover:not(:disabled) { background: rgba(255, 49, 95, 0.18); transform: scale(1.08); }
+.nav-arrow:active:not(:disabled) { transform: scale(0.94); transition-duration: 0.12s; }
 .nav-arrow:disabled { opacity: 0.2; cursor: default; }
 
 /* ---------- Selector de modalidad ---------- */
@@ -129,12 +134,12 @@ body {
 .mode-selector button {
   position: relative; z-index: 1; padding: 0.6rem 1.1rem; cursor: pointer;
   font-family: var(--font-orbitron); font-size: 0.66rem; font-weight: 700; letter-spacing: 0.2em;
-  color: rgba(234, 247, 255, 0.65); transition: color 0.3s;
+  color: rgba(234, 247, 255, 0.65); transition: color 0.45s var(--ease-out);
 }
 .mode-selector button[aria-selected="true"] { color: var(--bg); }
 .mode-thumb {
   position: absolute; top: 0; bottom: 0; left: 0; width: 50%; background: var(--cyan);
-  transition: transform 0.45s cubic-bezier(0.7, 0, 0.2, 1);
+  transition: transform 0.55s var(--ease-io);
 }
 
 /* ---------- Tarjetas y marcos ---------- */
@@ -173,7 +178,7 @@ body {
   --c: var(--cyan);
   display: grid; justify-items: center; gap: 2px; text-align: center; white-space: nowrap;
   font-family: var(--font-space-mono); opacity: 0; transform: translateY(8px) scale(0.96);
-  transition: opacity 0.3s, transform 0.3s;
+  transition: opacity 0.5s var(--ease-out), transform 0.6s var(--ease-out);
 }
 .bust-tag.on { opacity: 1; transform: none; }
 .bust-tag::before { content: ""; width: 1px; height: 26px; margin-bottom: 6px; background: linear-gradient(var(--c), transparent); }
@@ -184,7 +189,7 @@ body {
 .cursor-ring, .cursor-dot {
   position: fixed; left: 0; top: 0; z-index: 100; pointer-events: none; opacity: 0; border-radius: 50%;
 }
-.cursor-ring { width: 30px; height: 30px; margin: -15px 0 0 -15px; border: 1px solid var(--cyan); transition: opacity 0.3s; }
+.cursor-ring { width: 30px; height: 30px; margin: -15px 0 0 -15px; border: 1px solid var(--cyan); transition: opacity 0.3s; will-change: transform; }
 .cursor-dot { width: 6px; height: 6px; margin: -3px 0 0 -3px; background: var(--magenta); box-shadow: 0 0 10px var(--magenta); }
 .loader-bar { animation: loader 1.2s ease-in-out infinite; }
 @keyframes loader { from { transform: translateX(-100%); } to { transform: translateX(300%); } }

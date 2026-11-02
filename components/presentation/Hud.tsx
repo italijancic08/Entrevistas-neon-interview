@@ -41,7 +41,7 @@ export default function Hud({ step, mode, onMode, onGo, onPrev, onNext, coordRef
   return (
     <>
       <div className="pointer-events-none fixed left-0 top-0 z-20 h-[2px] w-full">
-        <div className="h-full bg-gradient-to-r from-neon-cyan to-neon-magenta transition-[width] duration-700" style={{ width: `${(step / LAST) * 100}%` }} />
+        <div className="h-full bg-gradient-to-r from-neon-cyan to-neon-magenta transition-[width] duration-[900ms] ease-[cubic-bezier(0.22,1,0.36,1)]" style={{ width: `${(step / LAST) * 100}%` }} />
       </div>
 
       <header className="pointer-events-none fixed inset-x-0 top-0 z-20 flex items-start justify-between px-5 pt-4 md:px-12 md:pt-6">
@@ -75,7 +75,7 @@ export default function Hud({ step, mode, onMode, onGo, onPrev, onNext, coordRef
               key={i}
               aria-label={`Ir al paso ${i + 1}`}
               onClick={() => onGo(i)}
-              className={`h-[6px] cursor-pointer rounded-full transition-all duration-500 ${
+              className={`h-[6px] cursor-pointer rounded-full transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${
                 i === step ? "w-7 bg-neon-magenta shadow-[0_0_12px_#FF315F]" : i < step ? "w-[6px] bg-neon-cyan/80" : "w-[6px] bg-ice/25"
               }`}
             />

@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Environment, Float, Grid, Lightformer, Sparkles } from "@react-three/drei";
+import { Environment, Float, Grid, Lightformer, PerformanceMonitor, Sparkles } from "@react-three/drei";
 import { Bloom, EffectComposer, ToneMapping, Vignette } from "@react-three/postprocessing";
 import { ToneMappingMode } from "postprocessing";
 import * as THREE from "three";
@@ -10,6 +10,7 @@ import Bust, { type BustTarget } from "./Bust";
 import { THEMES } from "@/lib/theme";
 import { STEPS, type Step, type View } from "@/lib/steps";
 import type { Device } from "@/hooks/useDevice";
+import { Damped, bell, clampDt, damp } from "@/lib/motion";
 
 const H = 3.35; // alto aproximado del busto a escala 1
 
@@ -109,38 +110,52 @@ function World({ view, dirRef, device, hovered, onHover, onSelect, mouse }: Worl
   const { busts, intensity } = useMemo(() => computeLayout(step, view, visW, visH, portrait), [step, view, visW, visH, portrait]);
 
   const intensityRef = useRef(1);
-  const kick = useRef(0);
   const enteredAt = useRef(0);
+  const kickFrom = useRef(-1e9);
   const gridRef = useRef<THREE.Mesh>(null);
 
+  // El mouse llega a saltos; se filtra antes de usarlo para mover busto y cámara.
+  const smoothMouse = useRef({ x: 0, y: 0 });
+
+  // Cámara: cada eje se amortigua (acelera y frena suave) en vez de perseguir el objetivo a velocidad máxima.
+  const cam = useRef({ x: new Damped(0), y: new Damped(0), z: new Damped(camZ) });
+
   useEffect(() => {
-    kick.current = device.reduced ? 0 : 1; // empuje de cámara en cada transición
+    // Empuje de cámara en cada transición: una campana 0 → 1 → 0, así arranca y termina sin tirones.
+    kickFrom.current = device.reduced ? -1e9 : performance.now();
     enteredAt.current = performance.now();
   }, [view.step, view.mode, view.selected, device.reduced]);
 
-  useFrame((state, dt) => {
-    const cam = state.camera as THREE.PerspectiveCamera;
-    const k = 1 - Math.exp(-dt * 3);
-    kick.current *= Math.exp(-dt * 2.4);
+  useFrame((state, rawDt) => {
+    const dt = clampDt(rawDt);
+    const camera = state.camera as THREE.PerspectiveCamera;
+    const c = cam.current;
+
+    const sm = smoothMouse.current;
+    const km = damp(6, dt);
+    sm.x += (mouse.current.x - sm.x) * km;
+    sm.y += (mouse.current.y - sm.y) * km;
+
+    const kick = bell((performance.now() - kickFrom.current) / 1500);
 
     let drift = 0;
     if (step.kind === "conclusion") drift = (step.f - 2) * 0.35;
     else if (step.kind === "intro" || step.kind === "presentation") drift = Math.sin(view.step * 1.3) * 0.25;
     const tx = step.kind === "question" ? 0 : drift;
 
-    cam.position.x += (tx + mouse.current.x * 0.18 - cam.position.x) * k;
-    cam.position.y += (mouse.current.y * 0.1 - cam.position.y) * k;
-    cam.position.z = camZ + kick.current * 1.6;
-    cam.rotation.z = kick.current * 0.05 * dirRef.current;
-    const fov = 40 + kick.current * 7;
-    if (Math.abs(cam.fov - fov) > 0.01) {
-      cam.fov = fov;
-      cam.updateProjectionMatrix();
+    camera.position.x = c.x.step(tx + sm.x * 0.18, 0.6, dt);
+    camera.position.y = c.y.step(sm.y * 0.1, 0.6, dt);
+    camera.position.z = c.z.step(camZ, 0.7, dt) + kick * 1.6;
+    camera.rotation.z = kick * 0.05 * dirRef.current;
+    const fov = 40 + kick * 7;
+    if (Math.abs(camera.fov - fov) > 0.01) {
+      camera.fov = fov;
+      camera.updateProjectionMatrix();
     }
 
     let ti = intensity;
     if (step.kind === "final") ti = Math.max(0.22, 1 - (performance.now() - enteredAt.current) / 1000 / 14);
-    intensityRef.current += (ti - intensityRef.current) * (1 - Math.exp(-dt * 2));
+    intensityRef.current += (ti - intensityRef.current) * damp(2, dt);
     state.scene.environmentIntensity = 0.25 + 0.75 * intensityRef.current;
 
     if (gridRef.current) gridRef.current.position.z = (state.clock.elapsedTime * 0.5) % 3;
@@ -191,7 +206,7 @@ function World({ view, dirRef, device, hovered, onHover, onSelect, mouse }: Worl
           index={i}
           target={t}
           intensity={intensityRef}
-          mouse={mouse}
+          mouse={smoothMouse}
           hovered={hovered === i}
           interactive={step.kind === "presentation"}
           showLabel={step.kind === "presentation"}
@@ -202,7 +217,7 @@ function World({ view, dirRef, device, hovered, onHover, onSelect, mouse }: Worl
       ))}
 
       {!device.lowPower && (
-        <EffectComposer multisampling={0}>
+        <EffectComposer multisampling={4}>
           <Bloom intensity={0.9} luminanceThreshold={0.85} luminanceSmoothing={0.2} mipmapBlur />
           <ToneMapping mode={ToneMappingMode.ACES_FILMIC} />
           <Vignette offset={0.2} darkness={0.8} />
@@ -223,6 +238,8 @@ export interface StageProps {
 
 export default function Stage({ view, dirRef, device, hovered, onHover, onSelect }: StageProps) {
   const mouse = useRef({ x: 0, y: 0 });
+  const maxDpr = device.lowPower ? 1.25 : 1.75;
+  const [dpr, setDpr] = useState(maxDpr);
 
   useEffect(() => {
     const h = (e: PointerEvent) => {
@@ -238,12 +255,14 @@ export default function Stage({ view, dirRef, device, hovered, onHover, onSelect
   return (
     <div className="fixed inset-0 z-0">
       <Canvas
-        dpr={device.lowPower ? [1, 1.25] : [1, 1.75]}
+        dpr={Math.min(dpr, maxDpr)}
         camera={{ fov: 40, position: [0, 0, 7], near: 0.1, far: 80 }}
         gl={{ antialias: !device.lowPower, powerPreference: "high-performance" }}
       >
         <color attach="background" args={["#071018"]} />
         <fog attach="fog" args={["#071018", 10, 28]} />
+        {/* Si los FPS caen, baja la resolución de forma gradual para mantener el movimiento fluido */}
+        <PerformanceMonitor onChange={({ factor }) => setDpr(Math.round((1 + (maxDpr - 1) * factor) * 8) / 8)} />
         <World view={view} dirRef={dirRef} device={device} hovered={hovered} onHover={onHover} onSelect={select} mouse={mouse} />
       </Canvas>
     </div>

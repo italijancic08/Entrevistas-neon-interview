@@ -65,7 +65,7 @@ export default function IndividualScene({ q, who, portrait, onWho, onQuestion }:
                 key={i}
                 aria-label={`Ir a la pregunta ${i + 1}`}
                 onClick={() => onQuestion(i)}
-                className={`pointer-events-auto h-2 cursor-pointer rounded-full transition-all duration-500 ${i === q ? "w-7 bg-neon-magenta" : "w-2 bg-ice/30 hover:bg-neon-cyan"}`}
+                className={`pointer-events-auto h-2 cursor-pointer rounded-full transition-all duration-500 ease-[cubic-bezier(0.22,1,0.36,1)] ${i === q ? "w-7 bg-neon-magenta" : "w-2 bg-ice/30 hover:bg-neon-cyan"}`}
               />
             ))}
           </div>

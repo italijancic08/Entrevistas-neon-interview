@@ -28,6 +28,8 @@ export default function Presentation() {
 
   const viewRef = useRef<View>(INITIAL);
   const lock = useRef(false);
+  const pending = useRef<{ patch: Partial<View>; dir: number } | null>(null); // último pedido recibido durante una transición
+  const commitRef = useRef<(patch: Partial<View>, dir: number) => void>(() => {});
   const dirRef = useRef(1);
   const overlayRef = useRef<HTMLDivElement>(null);
   const coordRef = useRef<HTMLSpanElement>(null);
@@ -44,7 +46,11 @@ export default function Presentation() {
 
   const commit = useCallback(
     (patch: Partial<View>, dir: number) => {
-      if (lock.current) return;
+      // Si llega un pedido en plena transición no se descarta: queda en cola y se aplica apenas termina.
+      if (lock.current) {
+        pending.current = { patch, dir };
+        return;
+      }
       const cur = viewRef.current;
       const next: View = { ...cur, ...patch };
       if (next.step === cur.step && next.mode === cur.mode && next.selected === cur.selected) return;
@@ -55,21 +61,32 @@ export default function Presentation() {
       handleHover(null);
       setView(next);
 
+      const release = () => {
+        lock.current = false;
+        const p = pending.current;
+        if (p) {
+          pending.current = null;
+          commitRef.current(p.patch, p.dir);
+        }
+      };
       const finish = () => {
         setShown(next);
-        window.setTimeout(() => {
-          lock.current = false;
-        }, 350);
+        window.setTimeout(release, 160);
       };
       const el = overlayRef.current;
       if (!el || reducedRef.current) {
         finish();
         return;
       }
-      gsap.to(el, { opacity: 0, x: -48 * dir, filter: "blur(8px)", duration: 0.28, ease: "power2.in", onComplete: finish });
+      // Salida: solo opacidad + desplazamiento (sin filter: un blur sobre toda la pantalla es carísimo para la GPU).
+      gsap.killTweensOf(el);
+      gsap.to(el, { opacity: 0, x: -40 * dir, duration: 0.36, ease: "power2.inOut", force3D: true, onComplete: finish });
     },
     [handleHover]
   );
+  useEffect(() => {
+    commitRef.current = commit;
+  }, [commit]);
 
   const goTo = useCallback(
     (step: number, extra: Partial<View> = {}) => {
@@ -145,24 +162,45 @@ export default function Presentation() {
     };
   }, [next, prev, goTo]);
 
-  // Parallax del título y coordenadas decorativas
+  // Parallax del título y coordenadas decorativas. El puntero solo fija el objetivo; un bucle lo
+  // sigue con suavizado independiente de los FPS (antes cada evento del mouse saltaba de golpe).
   useEffect(() => {
+    const target = { x: 0, y: 0 };
+    const cur = { x: 0, y: 0 };
+    let raf = 0;
+    let last = performance.now();
+    let title: HTMLElement | null = null;
+
     const h = (e: PointerEvent) => {
-      const x = (e.clientX / window.innerWidth) * 2 - 1;
-      const y = (e.clientY / window.innerHeight) * 2 - 1;
-      const root = document.documentElement.style;
-      root.setProperty("--mx", x.toFixed(3));
-      root.setProperty("--my", y.toFixed(3));
-      if (coordRef.current) coordRef.current.textContent = `X ${x.toFixed(2)} · Y ${(-y).toFixed(2)}`;
+      target.x = (e.clientX / window.innerWidth) * 2 - 1;
+      target.y = (e.clientY / window.innerHeight) * 2 - 1;
+      if (coordRef.current) coordRef.current.textContent = `X ${target.x.toFixed(2)} · Y ${(-target.y).toFixed(2)}`;
+    };
+    const loop = (now: number) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      const k = 1 - Math.exp(-dt * 7);
+      cur.x += (target.x - cur.x) * k;
+      cur.y += (target.y - cur.y) * k;
+      if (!title || !title.isConnected) title = document.querySelector<HTMLElement>(".title-3d");
+      if (title) {
+        title.style.setProperty("--mx", cur.x.toFixed(4));
+        title.style.setProperty("--my", cur.y.toFixed(4));
+      }
+      raf = requestAnimationFrame(loop);
     };
     window.addEventListener("pointermove", h);
-    return () => window.removeEventListener("pointermove", h);
+    raf = requestAnimationFrame(loop);
+    return () => {
+      window.removeEventListener("pointermove", h);
+      cancelAnimationFrame(raf);
+    };
   }, []);
 
   // Al cambiar el contenido visible, se restablece el contenedor (la entrada la anima cada escena)
   useLayoutEffect(() => {
     const el = overlayRef.current;
-    if (el) gsap.set(el, { clearProps: "opacity,transform,filter" });
+    if (el) gsap.set(el, { clearProps: "opacity,transform" });
   }, [shown]);
 
   const s = STEPS[shown.step];
