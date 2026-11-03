@@ -1,4 +1,4 @@
-# NEON INTERVIEW — Relevamiento de datos
+# INTERVIEW — Relevamiento de datos
 
 Presentación interactiva (Next.js + React Three Fiber) con tres entrevistados, ocho preguntas y conclusiones.
 UTN Facultad Regional Reconquista — Gestión de Desarrollo de Software.

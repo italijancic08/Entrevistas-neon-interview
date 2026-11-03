@@ -42,7 +42,7 @@ export default function Hud({ step, mode, onMode, onGo, onPrev, onNext }: Props)
   return (
     <>
       <header className="pointer-events-none fixed inset-x-0 top-0 z-20 flex items-center justify-between px-6 pt-6 md:px-14 md:pt-8">
-        <p className="font-display text-[0.72rem] font-bold tracking-[0.34em] text-ice">NEON INTERVIEW</p>
+        <p className="font-display text-[0.72rem] font-bold tracking-[0.34em] text-ice">INTERVIEW</p>
 
         <nav className="absolute left-1/2 hidden -translate-x-1/2 items-center gap-8 md:flex" aria-label="Escenas">
           {NAV.map((n) => (

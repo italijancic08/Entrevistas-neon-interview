@@ -14,7 +14,7 @@ const raleway = Raleway({
 });
 
 export const metadata: Metadata = {
-  title: "NEON INTERVIEW — Relevamiento de Datos",
+  title: "INTERVIEW — Relevamiento de Datos",
   description: "Nuestra Profesión vista desde la Sociedad. UTN Facultad Regional Reconquista.",
 };
 
