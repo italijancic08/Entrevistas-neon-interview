@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, type RefObject } from "react";
 import { useFrame } from "@react-three/fiber";
 import { Html, useGLTF } from "@react-three/drei";
 import * as THREE from "three";
+import { clone as cloneSkinned } from "three/examples/jsm/utils/SkeletonUtils.js";
 import type { BustTheme } from "@/lib/theme";
 import { Damped, clampDt } from "@/lib/motion";
 
@@ -30,93 +31,77 @@ interface Props {
 }
 
 /* ------------------------------------------------------------------ */
-/* Escaneo 3D de una cabeza humana real                                */
-/*   "Infinite" 3D Head Scan, Lee Perry-Smith (CC BY 3.0, triplegangers.com) */
+/* Modelos GLB realistas (uno por entrevistado) con expresiones        */
 /* ------------------------------------------------------------------ */
 
-const BASE = "/models/head";
-const HEAD_URL = `${BASE}/LeePerrySmith.glb`;
-useGLTF.preload(HEAD_URL);
+// Un modelo por entrevistado: E1 hombre con barba (Ready Player Me), E2 hombre rapado (Avaturn), E3 mujer (MPFB, CC0).
+const URLS = ["/models/heads/entrevistado1.glb", "/models/heads/entrevistado2.glb", "/models/heads/entrevistado3.glb"];
+URLS.forEach((u) => useGLTF.preload(u));
+
+// Pequeños ajustes por entrevistado (multiplican las texturas del modelo; blanco = sin cambio).
+const VARIANTS = [
+  { skin: "#ffffff", hair: "#ffffff", scale: 1.0 },
+  { skin: "#ffffff", hair: "#ffffff", scale: 1.0 },
+  { skin: "#ffffff", hair: "#ffffff", scale: 1.0 },
+];
 
 const HEAD_Y = 0.39; // altura del centro de la cabeza (para el halo)
-const K = 0.53; // escala del escaneo → unidades de la escena (cabeza ≈ 2.6 de alto)
-const CUT = -1.28; // por debajo de esta altura se descartan los triángulos (hombros)
-const FADE_TOP = -0.95; // el cuello se apaga entre FADE_TOP y FADE_END, así el corte no se nota
-const FADE_END = -1.25;
+// Brillo que reciben las caras: 1 = original, menos = más oscuro (afecta la luz frontal y el ambiente).
+const FACE_LIGHT = [0.4, 0.1, 0.5]; // uno por entrevistado (el 2 recibía demasiada luz)
+const K = 11; // metros del modelo → unidades de la escena (cabeza ≈ 2.6 de alto)
+const EYE_Y = 0.5; // altura de los ojos en la escena
+const NECK_BACK = 0.085; // distancia de los ojos al eje del cuello (m): la cabeza gira sobre él
 
-const smooth = (a: number, b: number, x: number) => {
-  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
-  return t * t * (3 - 2 * t);
-};
+/** Huesos de los ojos en los tres modelos (Character Creator / Rigify / Avaturn). */
+const EYE_BONE = /^(DEF_eye\.[LR]|LeftEye|RightEye|.*_[LR]_Eye)$/;
 
-let headGeo: THREE.BufferGeometry | null = null;
+/** Cada canal expresivo con el nombre del morph en cada convención (CC4 / ARKit). */
+const CHANNELS = {
+  blinkL: ["Eye_Blink_L", "eyeBlinkLeft"],
+  blinkR: ["Eye_Blink_R", "eyeBlinkRight"],
+  squintL: ["Eye_Squint_L", "eyeSquintLeft"],
+  squintR: ["Eye_Squint_R", "eyeSquintRight"],
+  wideL: ["Eye_Wide_L", "eyeWideLeft"],
+  wideR: ["Eye_Wide_R", "eyeWideRight"],
+  smileL: ["Mouth_Smile_L", "mouthSmileLeft"],
+  smileR: ["Mouth_Smile_R", "mouthSmileRight"],
+  cheekL: ["Cheek_Raise_L", "cheekSquintLeft"],
+  cheekR: ["Cheek_Raise_R", "cheekSquintRight"],
+  browInL: ["Brow_Raise_Inner_L", "browInnerUp"],
+  browInR: ["Brow_Raise_Inner_R"],
+  browOutL: ["Brow_Raise_Outer_L", "browOuterUpLeft"],
+  browOutR: ["Brow_Raise_Outer_R", "browOuterUpRight"],
+} as const;
+type Channel = keyof typeof CHANNELS;
+type Pair = [THREE.Mesh, number];
 
-/** Centra y escala el escaneo, quita los hombros y apaga el cuello hacia abajo (color de vértice). */
-function prepareHead(src: THREE.BufferGeometry): THREE.BufferGeometry {
-  if (headGeo) return headGeo;
-  const g = src.clone();
-  // Pivote en el eje del cuello: la cabeza gira sobre él, como una cabeza real.
-  g.translate(0.08, -1.185, 0.1);
-  g.scale(K, K, K);
-  g.translate(0, 0.2, 0);
-
-  const pos = g.attributes.position;
-  const idx = g.index!.array;
-  const keep: number[] = [];
-  for (let t = 0; t < idx.length; t += 3) {
-    const a = idx[t], b = idx[t + 1], c = idx[t + 2];
-    if (Math.min(pos.getY(a), pos.getY(b), pos.getY(c)) >= CUT) keep.push(a, b, c);
-  }
-  g.setIndex(keep);
-
-  const col = new Float32Array(pos.count * 3);
-  for (let i = 0; i < pos.count; i++) {
-    const f = smooth(FADE_END, FADE_TOP, pos.getY(i));
-    col[i * 3] = col[i * 3 + 1] = col[i * 3 + 2] = f;
-  }
-  g.setAttribute("color", new THREE.BufferAttribute(col, 3));
-  g.computeBoundingSphere();
-  headGeo = g;
-  return g;
+interface Shared {
+  uRimA: { value: THREE.Color };
+  uRimB: { value: THREE.Color };
+  uRimI: { value: number };
 }
 
-interface SkinMaps {
-  map: THREE.Texture;
-  normal: THREE.Texture;
-  spec: THREE.Texture;
-}
-let skinMaps: SkinMaps | null = null;
-function getSkinMaps(): SkinMaps {
-  if (!skinMaps) {
-    const loader = new THREE.TextureLoader();
-    const load = (file: string, srgb: boolean) => {
-      const t = loader.load(`${BASE}/${file}`);
-      t.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
-      t.anisotropy = 8;
-      return t;
-    };
-    skinMaps = {
-      map: load("Map-COL.jpg", true),
-      normal: load("Infinite-Level_02_Tangent_SmoothUV.jpg", false),
-      spec: load("Map-SPEC.jpg", true),
-    };
-  }
-  return skinMaps;
+interface EyeRig {
+  bone: THREE.Object3D;
+  q0: THREE.Quaternion;
+  A: THREE.Quaternion;
+  Ainv: THREE.Quaternion;
 }
 
-/* ------------------------------------------------------------------ */
-/* Material de piel                                                    */
-/* ------------------------------------------------------------------ */
+interface Rig {
+  object: THREE.Object3D;
+  eyes: EyeRig[];
+  pairs: Record<Channel, Pair[]>;
+  mats: THREE.Material[];
+}
 
 /**
- * Luz de contorno (rim) por fresnel, inyectada como emisión: recorta la silueta con el borde
- * cálido/frío de la referencia sin depender de las luces de la escena. Se apaga junto con el cuello.
+ * Luz de contorno (rim) por fresnel, inyectada como emisión. El apagado del cuello viene horneado
+ * en el color de vértice del GLB (COLOR_0): oscurece la piel y también la luz de contorno.
  */
-function addRim(mat: THREE.MeshPhysicalMaterial, a: THREE.Color, b: THREE.Color, rimI: { value: number }) {
+function patchMaterial(mat: THREE.Material, sh: Shared) {
   mat.onBeforeCompile = (shader) => {
-    shader.uniforms.uRimA = { value: a };
-    shader.uniforms.uRimB = { value: b };
-    shader.uniforms.uRimI = rimI;
+    Object.assign(shader.uniforms, sh);
     shader.fragmentShader = shader.fragmentShader
       .replace("#include <common>", "#include <common>\nuniform vec3 uRimA;\nuniform vec3 uRimB;\nuniform float uRimI;")
       .replace(
@@ -137,30 +122,70 @@ function addRim(mat: THREE.MeshPhysicalMaterial, a: THREE.Color, b: THREE.Color,
         }`
       );
   };
-  mat.customProgramCacheKey = () => "head-rim-v1";
+  mat.customProgramCacheKey = () => "bust-glb-v2";
 }
 
-function makeSkinMaterial(theme: BustTheme, rimI: { value: number }) {
-  const m = getSkinMaps();
-  const mat = new THREE.MeshPhysicalMaterial({
-    color: theme.skin,
-    map: m.map,
-    normalMap: m.normal,
-    normalScale: new THREE.Vector2(1.1, 1.1),
-    specularColorMap: m.spec,
-    specularIntensity: 1,
-    metalness: 0,
-    roughness: 0.52,
-    clearcoat: 0.12,
-    clearcoatRoughness: 0.45,
-    sheen: 0.6, // vello suave de la piel
-    sheenRoughness: 0.5,
-    sheenColor: new THREE.Color("#ffb59a"),
-    envMapIntensity: 0.9,
-    vertexColors: true,
+/** Clona el GLB, lo centra/escala, prepara materiales y localiza morphs y huesos de los ojos. */
+function buildRig(source: THREE.Object3D, sh: Shared, index: number): Rig {
+  const variant = VARIANTS[index % VARIANTS.length];
+  const KK = K * variant.scale;
+  const object = cloneSkinned(source);
+  object.updateMatrixWorld(true);
+
+  const eyes: EyeRig[] = [];
+  const center = new THREE.Vector3();
+  object.traverse((o) => {
+    if (!EYE_BONE.test(o.name) || !o.parent) return;
+    const A = new THREE.Quaternion();
+    o.parent.getWorldQuaternion(A);
+    eyes.push({ bone: o, q0: o.quaternion.clone(), A, Ainv: A.clone().invert() });
+    center.add(o.getWorldPosition(new THREE.Vector3()));
   });
-  addRim(mat, new THREE.Color(theme.b), new THREE.Color(theme.a), rimI);
-  return mat;
+  if (eyes.length) center.divideScalar(eyes.length);
+  else center.set(0, 1.6, 0.1);
+
+  // Ojos a EYE_Y y eje del cuello en el origen: la cabeza gira sobre él.
+  object.scale.setScalar(KK);
+  object.position.set(-center.x * KK, EYE_Y - center.y * KK, -(center.z - NECK_BACK) * KK);
+
+  const mats: THREE.Material[] = [];
+  const morphMeshes: THREE.Mesh[] = [];
+  object.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    mesh.raycast = () => {}; // el hover usa una malla proxy (el pelo tiene miles de triángulos)
+    mesh.frustumCulled = false;
+    const m = (mesh.material as THREE.MeshStandardMaterial).clone();
+    const label = `${mesh.name} ${m.name}`;
+    const count = mesh.geometry.attributes.position.count;
+    // Pelo y pestañas: recorte por alfa (sin transparencia) para que no haya errores de orden.
+    if (/lash/i.test(label) || (m.transparent && count > 1000 && !/AO|occlusion|tear/i.test(label))) {
+      m.transparent = false;
+      m.alphaTest = Math.max(m.alphaTest, 0.35);
+      m.depthWrite = true;
+      m.side = THREE.DoubleSide;
+    }
+    m.envMapIntensity = 0.9 * FACE_LIGHT[index % FACE_LIGHT.length];
+    // Variaciones entre entrevistados: tono de piel y color de pelo/cejas.
+    if (/^base$/i.test(mesh.name)) m.color.multiply(new THREE.Color(variant.skin));
+    else if (/ponytail|hair|eyebrow|lash/i.test(label)) m.color.multiply(new THREE.Color(variant.hair));
+    patchMaterial(m, sh);
+    mesh.material = m;
+    mats.push(m);
+    if (mesh.morphTargetDictionary && mesh.morphTargetInfluences) morphMeshes.push(mesh);
+  });
+
+  const pairs = {} as Record<Channel, Pair[]>;
+  (Object.keys(CHANNELS) as Channel[]).forEach((ch) => {
+    pairs[ch] = [];
+    for (const mesh of morphMeshes) {
+      for (const name of CHANNELS[ch]) {
+        const idx = mesh.morphTargetDictionary![name];
+        if (idx !== undefined) pairs[ch].push([mesh, idx]);
+      }
+    }
+  });
+  return { object, eyes, pairs, mats };
 }
 
 /** Halo difuso que se pega detrás de la cabeza: la luz cálida "rebotando" en el fondo. */
@@ -185,6 +210,23 @@ function getGlow() {
 
 const moved = (a: BustTarget, b: BustTarget) => Math.abs(a.x - b.x) + Math.abs(a.y - b.y) + Math.abs(a.s - b.s) * 3 > 0.3;
 
+interface Fx {
+  nextBlink: number;
+  blinkStart: number;
+  nextSaccade: number;
+  sx: number;
+  sy: number;
+  gx: number;
+  gy: number;
+  smile: number;
+  brow: number;
+  wide: number;
+}
+
+const damp = THREE.MathUtils.damp;
+const dq = new THREE.Quaternion();
+const eul = new THREE.Euler();
+
 export default function Bust({ theme, index, target, intensity, mouse, hovered, interactive, showLabel, onHover, onSelect }: Props) {
   const root = useRef<THREE.Group>(null);
   const glowMat = useRef<THREE.SpriteMaterial>(null);
@@ -205,13 +247,34 @@ export default function Bust({ theme, index, target, intensity, mouse, hovered, 
     wait: 0,
   });
 
+  // Estado de las expresiones (parpadeo, mirada, sonrisa, cejas).
+  const fx = useRef<Fx>({
+    nextBlink: 1 + index * 0.7,
+    blinkStart: -10,
+    nextSaccade: 0,
+    sx: 0,
+    sy: 0,
+    gx: 0,
+    gy: 0,
+    smile: 0,
+    brow: 0,
+    wide: 0,
+  });
+
   const rimI = useMemo(() => ({ value: 1 }), []);
-  const gltf = useGLTF(HEAD_URL) as unknown as { nodes: Record<string, THREE.Mesh> };
-  const geometry = useMemo(() => prepareHead(gltf.nodes.LeePerrySmith.geometry), [gltf]);
-  const material = useMemo(() => makeSkinMaterial(theme, rimI), [theme, rimI]);
+  const shared = useMemo<Shared>(
+    () => ({
+      uRimA: { value: new THREE.Color(theme.b) },
+      uRimB: { value: new THREE.Color(theme.a) },
+      uRimI: rimI,
+    }),
+    [theme, rimI]
+  );
+  const gltf = useGLTF(URLS[index % URLS.length]);
+  const rig = useMemo(() => buildRig(gltf.scene, shared, index), [gltf, shared]);
   const glow = useMemo(() => getGlow(), []);
 
-  useEffect(() => () => material.dispose(), [material]);
+  useEffect(() => () => rig.mats.forEach((m) => m.dispose()), [rig]);
 
   useFrame((state, rawDt) => {
     const g = root.current;
@@ -248,10 +311,62 @@ export default function Bust({ theme, index, target, intensity, mouse, hovered, 
     g.rotation.y = pry + mo.x * 0.5 + Math.sin(t * 0.35 + index) * 0.1 + hov * Math.sin(t * 1.4) * 0.05;
     g.rotation.x = -mo.y * 0.16 + hov * Math.sin(t * 1.1) * 0.015;
 
+    /* ---------------- Expresiones ---------------- */
+    const f = fx.current;
+    const put = (ch: Channel, v: number) => {
+      for (const [mesh, i] of rig.pairs[ch]) mesh.morphTargetInfluences![i] = v;
+    };
+
+    // Parpadeo aleatorio (a veces doble).
+    if (t >= f.nextBlink) {
+      f.blinkStart = t;
+      f.nextBlink = t + (Math.random() < 0.2 ? 0.32 : 2 + Math.random() * 4);
+    }
+    const bp = (t - f.blinkStart) / 0.17;
+    const blink = bp >= 0 && bp <= 1 ? Math.pow(Math.sin(bp * Math.PI), 0.7) : 0;
+
+    // Sonrisa y cejas: un fondo casi neutro que respira, y más expresivo con el cursor encima.
+    const idle = 0.5 + 0.5 * Math.sin(t * 0.27 + index * 2.1);
+    const smileT = 0.05 + idle * 0.05 + hov * 0.5;
+    const browT = hov * 0.4 + Math.pow(Math.max(0, Math.sin(t * 0.45 + index * 1.3)), 8) * 0.35;
+    const wideT = hov * 0.15;
+    f.smile = damp(f.smile, smileT, 6, dt);
+    f.brow = damp(f.brow, browT, 6, dt);
+    f.wide = damp(f.wide, wideT, 6, dt);
+
+    put("blinkL", blink);
+    put("blinkR", blink);
+    put("smileL", f.smile);
+    put("smileR", f.smile);
+    put("cheekL", f.smile * 0.5);
+    put("cheekR", f.smile * 0.5);
+    put("squintL", f.smile * 0.35);
+    put("squintR", f.smile * 0.35);
+    put("wideL", f.wide * (1 - blink));
+    put("wideR", f.wide * (1 - blink));
+    put("browInL", f.brow);
+    put("browInR", f.brow);
+    put("browOutL", f.brow * 0.6);
+    put("browOutR", f.brow * 0.6);
+
+    // Mirada: sigue al cursor con pequeños movimientos rápidos (sacadas) como un ojo real.
+    if (t >= f.nextSaccade) {
+      f.sx = (Math.random() - 0.5) * 0.12;
+      f.sy = (Math.random() - 0.5) * 0.07;
+      f.nextSaccade = t + 0.7 + Math.random() * 1.8;
+    }
+    f.gx = damp(f.gx, THREE.MathUtils.clamp(mo.x * 0.3 + f.sx, -0.45, 0.45), 12, dt);
+    f.gy = damp(f.gy, THREE.MathUtils.clamp(mo.y * 0.2 + f.sy, -0.3, 0.3), 12, dt);
+    dq.setFromEuler(eul.set(-f.gy, f.gx, 0));
+    for (const e of rig.eyes) {
+      // Rotación definida en el espacio del modelo y llevada al espacio local del hueso.
+      e.bone.quaternion.copy(e.Ainv).multiply(dq).multiply(e.A).multiply(e.q0);
+    }
+
     const I = intensity.current * (1 + hov * 1.3);
     rimI.value = 0.35 + 0.65 * Math.min(intensity.current, 1.1) + hov * 0.6;
     const sq = s * s; // compensa la caída de luz al escalar el grupo
-    if (lightA.current) lightA.current.intensity = 30 * I * sq; // luz principal suave, desde el frente
+    if (lightA.current) lightA.current.intensity = 30 * FACE_LIGHT[index % FACE_LIGHT.length] * I * sq;// luz principal suave, desde el frente
     if (lightB.current) lightB.current.intensity = 80 * I * sq; // contraluz cálido
     if (lightC.current) lightC.current.intensity = 18 * I * sq; // contraluz frío
     if (glowMat.current) glowMat.current.opacity = 0.2 * Math.min(intensity.current, 1.1) * (1 + hov * 0.9);
@@ -274,7 +389,13 @@ export default function Bust({ theme, index, target, intensity, mouse, hovered, 
         onSelect(index + 1);
       }}
     >
-      <mesh geometry={geometry} material={material} scale={theme.shape} />
+      <primitive object={rig.object} />
+
+      {/* Zona de hover invisible: raycast barato en vez de recorrer la malla del pelo */}
+      <mesh position={[0, 0.2, 0]} scale={[1.15, 1.6, 1.15]}>
+        <sphereGeometry args={[1, 12, 10]} />
+        <meshBasicMaterial visible={false} />
+      </mesh>
 
       {/* Halo cálido detrás de la cabeza */}
       <sprite position={[0.5, HEAD_Y, -1.4]} scale={[4.8, 4.8, 1]} raycast={() => null}>

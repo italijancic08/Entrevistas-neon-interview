@@ -30,7 +30,7 @@ export default function InterviewersScene({ portrait, onSelect, onCompare, onHov
 
       <div className="flex flex-col items-center gap-5">
         <p data-anim className="eyebrow muted text-center">
-          {portrait ? "Tocá un entrevistado para ver sus respuestas" : "Pasá el mouse sobre un busto · click para modo individual"}
+          {portrait ? "Tocá un entrevistado para ver sus respuestas" : "Pasá el mouse sobre un personaje · click para modo individual"}
         </p>
         <div className="flex flex-wrap justify-center gap-3">
           {([1, 2, 3] as const).map((n) => (
